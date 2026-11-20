@@ -1,0 +1,15 @@
+# Private creator notes: never published
+CREATOR-NOTES.md
+
+# Large downloads: fetched by setup-usb.sh, never committed
+*.gguf
+*.iso
+bin/
+models/
+
+# Session logs can contain hostnames, usernames and paths from troubleshooted PCs
+logs/
+
+# Python
+__pycache__/
+*.pyc
