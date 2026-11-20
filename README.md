@@ -62,3 +62,10 @@ See **[guidance.md](guidance.md)** for the full guide:
 5. Settings
 6. Troubleshooting
 7. Safety notes
+
+## License
+
+Willy's code is released under the [MIT License](LICENSE). © 2026 Wilson Sumanang.
+
+The AI brains, the engine, Ventoy and Ubuntu are not part of this repository. They are
+separate projects with their own licences, downloaded when a stick is built.
