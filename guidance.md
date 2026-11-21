@@ -49,8 +49,37 @@ Type `?` at any time to see the help screen inside Willy.
 | `/run <cmd>` | run a command yourself and share its output with Willy          |
 | `/snapshot`  | show the system overview Willy collected at startup             |
 | `/reset`     | start a new conversation                                        |
+| `/undo`      | reverse the last change (`/undo list` shows every change you can undo) |
+| `/report`    | save a one-page summary: problem, cause, what was fixed, what's left |
+| `/rescue`    | rescue mode: find and open the PC's installed Linux (see section 4) |
 | `/quit`      | exit Willy (also stops its AI engine)                           |
 | Ctrl+C       | stop Willy's current reply                                      |
+
+### Undo: reversing a change
+
+Before any approved command that changes or deletes files, Willy saves a backup of exactly
+the files it will touch, and the approval prompt tells you so:
+
+```
+  Willy wants to run:
+    $ sudo sed -i 's/^UUID=old/UUID=new/' /etc/fstab
+  CHANGES YOUR SYSTEM: runs as root; edits files in place.
+  Undo: Willy will back up /etc/fstab first.
+```
+
+If the fix doesn't help, type `/undo` and the files go back exactly as they were, including
+permissions and owners. Service changes (`systemctl enable/disable/mask/start/stop`) are undone
+by reversing them, and files the command created are removed.
+
+**Some changes can't be undone**, and Willy tells you *before* you approve them: installing or
+removing software, disk and partition changes, and bootloader installs. Backups are kept in
+`willy/backups/` on the stick (files over 200 MB are skipped, and Willy says so).
+
+### Reports
+
+Type `/report` at the end of a session. Willy writes a plain-language summary (problem, what
+was checked, cause, what was changed, what's left to do) plus a table of every command run, and
+saves it in `willy/reports/` on the stick. It's handy to keep or to give to the PC's owner.
 
 ### Answering Willy's requests
 
@@ -148,17 +177,21 @@ Use this when Linux crashes, freezes at startup, shows a black screen, drops to
    bash /media/*/Ventoy/willy/start.sh
    ```
 
-6. Tell Willy that you're in a live session and that the installed system is on the
-   internal disk. Then ask for help mounting it. Typical steps it will walk you through:
+6. Willy notices it's running from the rescue USB. Type **`/rescue`** and Willy:
+   - finds the PC's installed Linux on its internal disks, and if there's more than one
+     it asks which. Encrypted disks are supported: **you** type the disk passphrase and
+     Willy never sees it.
+   - opens it **read-only**. Nothing on the PC's disk is written, not even a journal replay.
+   - reads why it failed: errors from its last boots, its kernels, its `/etc/fstab`, recent
+     software updates and disk space. It then explains the likely cause.
+7. To fix it, type **`/rescue repair`**. Willy opens the system read-write and connects it so
+   repair tools (GRUB, initramfs, the package manager) run inside it. Every repair command still
+   needs your approval, and file changes can be reversed with `/undo`.
+8. When you're done, type **`/rescue off`** to close everything safely, then restart the PC
+   without the stick.
 
-   ```bash
-   sudo mount /dev/sdXN /mnt                  # the broken system's root partition
-   for d in dev proc sys run; do sudo mount --bind /$d /mnt/$d; done
-   sudo chroot /mnt                           # now you are "inside" the installed system
-   ```
-
-   From there you can reinstall GRUB, rebuild the initramfs, fix fstab, remove a bad
-   package, or copy files off a failing disk before doing anything risky.
+`/rescue status` shows what is open. Each `/rescue` step lists its exact commands and waits for
+your approval before running them.
 
 ### If the boot menu doesn't show the stick
 
@@ -177,6 +210,12 @@ Set these before the start command, for example `WILLY_THREADS=4 bash .../start.
 | `WILLY_CTX` | `8192` | how much of the conversation Willy remembers |
 | `WILLY_THREADS` | all cores | CPU threads Willy uses |
 | `WILLY_PORT` | `8080` | local port for Willy's engine |
+| `WILLY_GPU` | on when an NVIDIA or AMD card is found | set to `0` to always use the CPU |
+
+**Graphics cards:** Willy tries to use an NVIDIA or AMD card automatically, which makes replies
+much faster. It needs the card's proprietary driver installed and a modern system (glibc 2.34
+or newer). When the card can't be used, Willy says so at startup and runs on the CPU instead.
+The Ubuntu rescue system uses open-source drivers, so in rescue mode Willy usually runs on the CPU.
 
 ## 6. Troubleshooting
 
@@ -192,8 +231,10 @@ Set these before the start command, for example `WILLY_THREADS=4 bash .../start.
 
 - The AI can be wrong. Read each command before approving it, especially red ones.
 - Back up important data before letting it change disks, the bootloader or packages.
-- Everything runs locally, so nothing is sent off the machine. Session logs are saved in
-  `willy/logs/` on the stick and may contain hostnames, usernames and paths from that PC.
+- Everything runs locally, so nothing is sent off the machine. Session logs, backups and reports
+  are saved in `willy/logs/`, `willy/backups/` and `willy/reports/` on the stick. They may contain
+  hostnames, usernames, paths and copies of settings files from that PC, so clear them before
+  giving the stick to someone else.
 
 ---
 

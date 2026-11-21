@@ -84,23 +84,64 @@ else
   THREAD_ARGS=()
   [[ -n "${WILLY_THREADS:-}" ]] && THREAD_ARGS=(-t "$WILLY_THREADS")
 
+  # Use the graphics card when there is one (5-10x faster replies). WILLY_GPU=0 forces CPU.
+  GPU_ARGS=(); GPU_NAME=""
+  if [[ "${WILLY_GPU:-auto}" != "0" ]]; then
+    if command -v nvidia-smi >/dev/null 2>&1 && nvidia-smi -L >/dev/null 2>&1; then
+      GPU_ARGS=(-ngl 999); GPU_NAME="NVIDIA graphics card"
+    elif [[ -e /dev/kfd ]] && ls /sys/class/drm/card*/device/vendor 2>/dev/null \
+         | xargs -r cat 2>/dev/null | grep -q 0x1002; then
+      GPU_ARGS=(-ngl 999); GPU_NAME="AMD graphics card"
+    fi
+  fi
+
   mkdir -p "$USB_DIR/logs" 2>/dev/null || true
   SERVER_LOG="${RUN_DIR}/server.log"
   label=$(basename "$MODEL" .gguf); label=${label#willy-}
-  echo "Starting Willy (${label} brain, this can take a minute from USB)..."
-  "${RUNNER[@]}" --server --nobrowser -m "$MODEL" --host 127.0.0.1 --port "$PORT" \
-      -c "$CTX" ${THREAD_ARGS[@]+"${THREAD_ARGS[@]}"} >"$SERVER_LOG" 2>&1 &
-  SERVER_PID=$!
 
-  for _ in $(seq 1 300); do
-    if health; then break; fi
-    if ! kill -0 "$SERVER_PID" 2>/dev/null; then
+  start_engine() {  # $1 = "gpu" or "cpu"
+    local extra=()
+    [[ "$1" == "gpu" ]] && extra=("${GPU_ARGS[@]}")
+    "${RUNNER[@]}" --server --nobrowser -m "$MODEL" --host 127.0.0.1 --port "$PORT" \
+        -c "$CTX" ${THREAD_ARGS[@]+"${THREAD_ARGS[@]}"} ${extra[@]+"${extra[@]}"} >"$SERVER_LOG" 2>&1 &
+    SERVER_PID=$!
+    for _ in $(seq 1 300); do
+      if health; then return 0; fi
+      kill -0 "$SERVER_PID" 2>/dev/null || return 1
+      sleep 1
+    done
+    return 1
+  }
+
+  MODE=cpu
+  (( ${#GPU_ARGS[@]} )) && MODE=gpu
+  if [[ "$MODE" == gpu ]]; then
+    echo "Starting Willy (${label} brain, trying the ${GPU_NAME})..."
+  else
+    echo "Starting Willy (${label} brain, this can take a minute from USB)..."
+  fi
+  if ! start_engine "$MODE"; then
+    if [[ "$MODE" == gpu ]]; then
+      kill "$SERVER_PID" 2>/dev/null || true; wait "$SERVER_PID" 2>/dev/null || true
+      echo "The graphics card couldn't be used; starting Willy on the CPU instead..."
+      MODE=cpu
+      start_engine cpu || { tail -n 20 "$SERVER_LOG" >&2; die "Willy's engine could not start (log above)."; }
+    else
       tail -n 20 "$SERVER_LOG" >&2
-      die "model server exited during startup (log above)."
+      die "Willy's engine could not start (log above)."
     fi
-    sleep 1
-  done
-  health || die "model server did not become ready in 5 minutes. Log: $SERVER_LOG"
+  fi
+  if [[ "$MODE" == gpu ]]; then
+    # The engine quietly falls back to the CPU when the card's driver libraries are
+    # missing or too old, so check that layers really went to the GPU.
+    if grep -qE 'offloaded [1-9][0-9]*/[0-9]+ layers to GPU' "$SERVER_LOG"; then
+      echo "Using the ${GPU_NAME}: replies will be fast."
+    else
+      echo "Found an ${GPU_NAME}, but this system can't use it for Willy (driver libraries"
+      echo "missing or too old), so Willy is running on the CPU. Replies will be slower."
+    fi
+  fi
 fi
 
-python3 "$USB_DIR/willy.py" --api "$API" --log-dir "$USB_DIR/logs" "$@"
+PYTHONDONTWRITEBYTECODE=1 python3 "$USB_DIR/willy.py" --api "$API" --log-dir "$USB_DIR/logs" \
+  --backup-dir "$USB_DIR/backups" --report-dir "$USB_DIR/reports" "$@"

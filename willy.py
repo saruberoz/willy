@@ -22,6 +22,10 @@ import sys
 import urllib.error
 import urllib.request
 
+sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
+import willy_rescue  # noqa: E402
+import willy_undo  # noqa: E402
+
 COLOR = sys.stdout.isatty() and os.environ.get("NO_COLOR") is None
 
 
@@ -63,6 +67,22 @@ Rules:
 - Some commands are blocked by guardrails. If one is blocked, do not try to get around it;
   suggest a safer approach instead.
 - Use sudo only when root is really needed.
+
+Rescue mode and undo:
+- If the snapshot says this is a live session (the rescue USB) and the user's installed Linux
+  won't boot or crashes, tell them to type /rescue. Willy then finds the installed system and
+  opens it read-only at /mnt/willy-target, and you receive its logs and settings.
+- While it is open, its files are under /mnt/willy-target (for example
+  /mnt/willy-target/etc/fstab) and its logs can be read with
+  `sudo journalctl -D /mnt/willy-target/var/log/journal -b -p err --no-pager`.
+- To repair it (GRUB, initramfs, packages, fstab), the user must first type /rescue repair.
+  Then run tools inside it as `sudo chroot /mnt/willy-target <command>`.
+- Willy backs up files before approved changes. The user can type /undo to reverse the last
+  file or service change, so mention /undo when a fix doesn't help. /undo can NOT reverse
+  package installs or removals, disk/partition changes or bootloader installs, so warn
+  before those.
+- /undo, /rescue, /report and the other slash commands are typed by the user in the chat.
+  They are not shell commands: never put them in a ```run block.
 - When you know the cause, give a short diagnosis and numbered fix steps.
 - Be concise. Do not invent output you have not seen.
 """
@@ -242,6 +262,9 @@ def ask_model(api, messages, max_tokens, temperature):
         "temperature": temperature,
         "max_tokens": max_tokens,
         "stream": True,
+        # Reuse the engine's memory of the conversation so far; without this every
+        # reply re-reads the whole conversation (over a minute on a laptop CPU).
+        "cache_prompt": True,
     }).encode("utf-8")
     req = urllib.request.Request(api, data=body, headers={"Content-Type": "application/json"})
     parts = []
@@ -310,6 +333,14 @@ def read_line(prompt):
     return input(prompt).replace("﻿", "").strip()
 
 
+def undo_notes(cmd):
+    """Plain-English lines saying whether /undo will be able to reverse `cmd`."""
+    try:
+        return willy_undo.plan_command(cmd, os.getcwd()).describe()
+    except Exception:  # planning is best effort and must never block approval
+        return ["Undo: Willy couldn't work out what this changes, so it may not be undoable."]
+
+
 def confirm(cmd, who="Willy"):
     """Ask before running a command.
 
@@ -319,7 +350,7 @@ def confirm(cmd, who="Willy"):
     while True:
         level, reasons = classify(cmd)
         print()
-        print(c("  %s wants to run:" % who, "1;33"))
+        print(c("  You asked to run:" if who == "You" else "  %s wants to run:" % who, "1;33"))
         for line in cmd.splitlines():
             print(c("    $ " + line, "1"))
 
@@ -333,6 +364,9 @@ def confirm(cmd, who="Willy"):
             print(c("  This may not be undoable. Make sure you have a backup first.", "31"))
         elif level == "change":
             print(c("  CHANGES YOUR SYSTEM: " + "; ".join(reasons) + ".", "1;33"))
+        if level in ("change", "delete"):
+            for line in undo_notes(cmd):
+                print(c("  " + line, "36"))
 
         word = APPROVAL_WORD[level]
         if level == "safe":
@@ -370,6 +404,154 @@ def confirm(cmd, who="Willy"):
         print(c("  Not understood. Nothing was run.", "33"))
 
 
+LEVEL_RANK = {"safe": 0, "change": 1, "delete": 2, "blocked": 3}
+
+
+def approve_batch(title, cmds):
+    """Show a group of commands Willy needs for one job and ask once.
+
+    The approval word is set by the most dangerous command in the group, and a
+    group containing a blocked command can never run."""
+    worst, reasons = "safe", []
+    for cmd in cmds:
+        level, why = classify(cmd)
+        if LEVEL_RANK[level] > LEVEL_RANK[worst]:
+            worst = level
+        reasons += [r for r in why if r not in reasons]
+    print()
+    print(c("  Willy needs to: %s" % title, "1;33"))
+    for cmd in cmds:
+        print(c("    $ " + cmd, "1"))
+    if worst == "blocked":
+        print(c("  BLOCKED by Willy's guardrails: " + "; ".join(reasons) + ".", "1;41"))
+        return False
+    if worst != "safe":
+        color = "1;31" if worst == "delete" else "1;33"
+        label = "DELETES OR OVERWRITES DATA" if worst == "delete" else "CHANGES YOUR SYSTEM"
+        print(c("  %s: %s." % (label, "; ".join(reasons)), color))
+    word = APPROVAL_WORD[worst]
+    while True:
+        try:
+            ans = read_line("  Type '%s' to go ahead, Enter to cancel: " % word).lower()
+        except (EOFError, KeyboardInterrupt):
+            print()
+            return False
+        if ans == word or (worst == "safe" and ans == "yes"):
+            return True
+        if ans in ("", "n", "no", "q"):
+            print("  Cancelled. Nothing was run.")
+            return False
+        print(c("  To approve, type the word '%s'." % word, "33"))
+
+
+class HelperUI(object):
+    """What the rescue and undo helpers use to talk to the user and run commands."""
+
+    def __init__(self, timeout, log, events):
+        self.timeout, self.log, self.events = timeout, log, events
+
+    def approve(self, title, cmds):
+        ok = approve_batch(title, cmds)
+        self.log.write("approval", "%s (%s):\n%s" % ("approved" if ok else "declined", title, "\n".join(cmds)))
+        return ok
+
+    def run(self, cmd):
+        code, out = run_shell(cmd, max(self.timeout, 120))
+        self.events.append({"who": "Willy (helper)", "cmd": cmd, "level": classify(cmd)[0], "exit": code})
+        return code, out
+
+    def run_interactive(self, cmd):
+        # For steps where the user types something themselves (like a disk passphrase).
+        code = subprocess.call([shutil.which("bash") or "/bin/sh", "-c", cmd])
+        self.events.append({"who": "Willy (helper)", "cmd": cmd, "level": classify(cmd)[0], "exit": code})
+        return code
+
+    def say(self, text):
+        print(c(text, "36"))
+
+    def ask(self, prompt):
+        try:
+            return read_line(prompt)
+        except (EOFError, KeyboardInterrupt):
+            print()
+            return ""
+
+
+def execute(cmd, args, undo, events, who):
+    """Run an approved command, backing up what it changes first.
+
+    Returns (code, output, note_for_model) or None if the user cancelled."""
+    level = classify(cmd)[0]
+    entry = None
+    if level in ("change", "delete"):
+        try:
+            plan = willy_undo.plan_command(cmd, os.getcwd())
+            entry, problem = undo.prepare(cmd, plan)
+        except Exception as exc:  # never let backup planning crash a session
+            entry, problem = None, str(exc)
+        if problem:
+            print(c("  Willy couldn't make a backup first: %s" % problem, "1;31"))
+            try:
+                ans = read_line("  Run it anyway, without /undo? Type 'yes' to run, Enter to cancel: ").lower()
+            except (EOFError, KeyboardInterrupt):
+                ans = ""
+            if ans != "yes":
+                return None
+        elif entry and entry.get("archive"):
+            print(c("  Backup saved. Type /undo afterwards to reverse this.", "36"))
+    print(c("  running...", "2"))
+    code, out = run_shell(cmd, args.timeout)
+    undo.mark_ran(entry, code)
+    events.append({"who": who, "cmd": cmd, "level": level, "exit": code})
+    note = " (Willy saved a backup first, so this can be reversed with /undo.)" if entry else ""
+    return code, out, note
+
+
+REPORT_PROMPT = (
+    "Write a short troubleshooting report for this session in Markdown with these sections: "
+    "## Problem, ## What was checked, ## Cause, ## What was changed, ## What is left to do. "
+    "Use plain language a non-expert understands. If something is unknown, say so. "
+    "Do not include any ```run blocks and do not ask to run commands.")
+
+
+def write_report(args, messages, events, snapshot_os):
+    msgs = [m for m in messages] + [{"role": "user", "content": REPORT_PROMPT}]
+    print(c("\nwilly (writing report)> ", "1;32"), end="", flush=True)
+    try:
+        body = ask_model(args.api, msgs, 900, 0.2)
+    except (urllib.error.URLError, OSError, KeyboardInterrupt) as exc:
+        print(c("Could not write the report: %s" % exc, "1;31"))
+        return None
+    body = RUN_RE.sub("", THINK_RE.sub("", body)).strip()
+    now = dt.datetime.now()
+    lines = ["# Willy troubleshooting report", "",
+             "- **Date:** %s" % now.strftime("%Y-%m-%d %H:%M"),
+             "- **Computer:** %s" % socket.gethostname(),
+             "- **System:** %s" % snapshot_os, "", body, "", "## Commands run", ""]
+    if events:
+        lines += ["| # | Who | Level | Exit | Command |", "|---|-----|-------|------|---------|"]
+        for i, e in enumerate(events, 1):
+            lines.append("| %d | %s | %s | %s | `%s` |" % (i, e["who"], e["level"], e["exit"],
+                                                       e["cmd"].replace("|", "\\|").replace("`", "'")))
+    else:
+        lines.append("No commands were run.")
+    lines += ["", "---", "Report made by Willy, created by Wilson Sumanang."]
+    text = "\n".join(lines) + "\n"
+    for directory in (args.report_dir, os.path.join(os.path.expanduser("~"), "willy-reports")):
+        if not directory:
+            continue
+        try:
+            os.makedirs(directory, exist_ok=True)
+            path = os.path.join(directory, "willy-report-%s-%s.md" % (socket.gethostname(),
+                                                                     now.strftime("%Y%m%d-%H%M%S")))
+            with open(path, "w", encoding="utf-8") as fh:
+                fh.write(text)
+            return path
+        except OSError:
+            continue
+    return None
+
+
 class Log(object):
     def __init__(self, directory):
         self.fh = None
@@ -395,8 +577,16 @@ Chat commands
   /run <cmd>       run a command yourself and share the output with Willy
   /snapshot        show the system overview Willy collected at startup
   /reset           start a fresh conversation
-  /quit            exit Willy (also stops the AI model)
+  /undo            reverse the last change Willy made (/undo list shows them all)
+  /report          save a summary of this session (problem, cause, what was fixed)
+  /quit            exit Willy
   Ctrl+C           stop Willy's current reply
+
+Rescue mode (when the PC's own Linux won't start)
+  /rescue          find the PC's installed Linux and open it read-only
+  /rescue repair   open it read-write so repairs (GRUB, packages, fstab) can run
+  /rescue off      close it safely before restarting the PC
+  /rescue status   show what is open
 
 Approving commands Willy wants to run
   y                safe, read-only checks
@@ -450,19 +640,37 @@ def main():
     ap.add_argument("--max-tokens", type=int, default=1024)
     ap.add_argument("--max-steps", type=int, default=10, help="commands in a row before handing back to you")
     ap.add_argument("--temperature", type=float, default=0.2)
+    ap.add_argument("--backup-dir", default=os.environ.get("WILLY_BACKUP_DIR", ""),
+                    help="where /undo backups are kept")
+    ap.add_argument("--report-dir", default=os.environ.get("WILLY_REPORT_DIR", ""),
+                    help="where /report saves reports")
     args = ap.parse_args()
 
     if not server_ok(args.api):
-        print(c("Cannot reach the model server at %s. Start Willy with start.sh." % args.api, "1;31"))
+        print(c("Cannot reach Willy's engine at %s. Start Willy with start.sh." % args.api, "1;31"))
         return 1
 
     log = Log(args.log_dir)
+    events = []
+    ui = HelperUI(args.timeout, log, events)
+    undo = willy_undo.UndoJournal(args.backup_dir, ui)
+    rescue = willy_rescue.Rescue(ui)
+    live = willy_rescue.is_live_session()
+
     print(c("Willy: offline Linux troubleshooter", "1;32") + c("  (created by Wilson Sumanang)", "2"))
     print("Nothing runs without your approval. Type ? to see commands and examples.")
     print("Collecting system snapshot...", end="", flush=True)
     snapshot = gather_snapshot(1200)
+    if live:
+        snapshot = ("### Session type\nLive session started from the rescue USB. The PC's own "
+                    "installed Linux is NOT running; use /rescue to open it.\n\n" + snapshot)
     print(" done.")
     log.write("snapshot", snapshot)
+    m = re.search(r'PRETTY_NAME="?([^"\n]+)', snapshot)
+    snapshot_os = m.group(1) if m else "Linux"
+    if live:
+        print(c("\nYou started this PC from the rescue USB. If the PC's own Linux won't start,", "1;36"))
+        print(c("type /rescue and Willy will find it and read why it failed.", "1;36"))
 
     system = {"role": "system", "content": SYSTEM_PROMPT + "\n\nSystem snapshot:\n\n" + snapshot}
     messages = [system]
@@ -489,7 +697,47 @@ def main():
                 messages = [system]
                 print("Conversation cleared.")
                 continue
-            if user.startswith("/run "):
+            if user in ("/undo list", "/undo ls"):
+                print(undo.list_text())
+                continue
+            if user == "/undo":
+                note = undo.undo_last()
+                log.write("undo", note or "(nothing undone)")
+                if not note:
+                    continue
+                user = note
+            elif user == "/report":
+                path = write_report(args, messages, events, snapshot_os)
+                print(c("Report saved: %s" % path if path else "The report could not be saved.", "1;36"))
+                log.write("report", path or "(failed)")
+                continue
+            elif user.split()[0] == "/rescue":
+                sub = user.split()[1] if len(user.split()) > 1 else ""
+                try:
+                    if sub in ("", "open"):
+                        note = rescue.open()
+                        if note:
+                            note = ("I typed /rescue and Willy opened my installed system. Here is "
+                                    "what it found:\n\n" + note + "\n\nPlease work out why it fails "
+                                    "and how to fix it.")
+                    elif sub == "repair":
+                        note = rescue.repair()
+                    elif sub in ("off", "close"):
+                        note = rescue.close()
+                    else:
+                        print(rescue.status())
+                        continue
+                except (RuntimeError, OSError) as exc:
+                    print(c("Rescue problem: %s" % exc, "1;31"))
+                    continue
+                log.write("rescue", note or "(nothing changed)")
+                if not note:
+                    continue
+                if rescue.target:
+                    messages[0]["content"] = (SYSTEM_PROMPT + "\n\nSystem snapshot:\n\n" + snapshot
+                                              + "\n\n### Rescue status\n" + rescue.status())
+                user = note
+            elif user.startswith("/run "):
                 cmd = user[5:].strip()
                 # Your own commands pass the same guardrails when they are not read-only.
                 if classify(cmd)[0] != "safe":
@@ -499,10 +747,13 @@ def main():
                         break
                     if decision != "run":
                         continue
-                code, out = run_shell(cmd, args.timeout)
+                done = execute(cmd, args, undo, events, "You")
+                if done is None:
+                    continue
+                code, out, note = done
                 print(out)
-                user = "I ran this myself:\n$ %s\n(exit code %s)\n```\n%s\n```" % (
-                    cmd, code, truncate(out, args.max_output))
+                user = "I ran this myself:\n$ %s\n(exit code %s)%s\n```\n%s\n```" % (
+                    cmd, code, note, truncate(out, args.max_output))
             pending = user
 
         messages.append({"role": "user", "content": pending})
@@ -531,6 +782,14 @@ def main():
 
             cmd = extract_command(reply)
             if not cmd:
+                break
+            slash = re.match(r"^(?:sudo\s+)?(/(?:undo|rescue|report|reset|snapshot|run|help)\b.*)", cmd)
+            if slash:
+                # A chat command, not a shell command: the user decides whether to type it.
+                print(c("  Willy suggests typing  %s  yourself." % slash.group(1), "36"))
+                messages.append({"role": "user", "content": "(%s is a chat command I type myself; it "
+                                 "was not run as a shell command.)" % slash.group(1)})
+                messages.append({"role": "assistant", "content": "Understood."})
                 break
             steps += 1
             if steps > args.max_steps:
@@ -564,17 +823,25 @@ def main():
                 log.write("you", note)
                 continue
 
-            print(c("  running...", "2"))
-            code, out = run_shell(cmd, args.timeout)
+            done = execute(cmd, args, undo, events, "Willy")
+            if done is None:
+                messages.append({"role": "user", "content": "I cancelled that command because no "
+                                 "backup could be made. Suggest another approach."})
+                continue
+            code, out, note = done
             print(truncate(out.rstrip(), 4000) or "(no output)")
             print(c("  [exit code %s]" % code, "2"))
-            result = "$ %s\n(exit code %s)\n```\n%s\n```" % (cmd, code, truncate(out, args.max_output) or "(no output)")
+            result = "$ %s\n(exit code %s)%s\n```\n%s\n```" % (cmd, code, note,
+                                                              truncate(out, args.max_output) or "(no output)")
             messages.append({"role": "user", "content": "Output:\n" + result})
             log.write("command", result)
 
         if quitting:
             break
 
+    if rescue.target:
+        print(c("Note: the installed system is still open at %s. Type /rescue off next time, or "
+                "just restart the PC." % rescue.target["mountpoint"], "33"))
     if log.fh:
         print("Session log: %s" % log.path)
     return 0

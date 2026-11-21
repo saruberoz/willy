@@ -7,8 +7,14 @@ CREATOR-NOTES.md
 bin/
 models/
 
-# Session logs can contain hostnames, usernames and paths from troubleshooted PCs
+# Session logs, undo backups and reports can contain hostnames, usernames, paths
+# and copies of settings files from troubleshot PCs
 logs/
+backups/
+reports/
+
+# Local planning notes
+ROADMAP.md
 
 # Python
 __pycache__/
