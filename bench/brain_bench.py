@@ -30,6 +30,7 @@ import urllib.request
 HERE = os.path.dirname(os.path.abspath(__file__))
 sys.path.insert(0, os.path.join(HERE, ".."))
 import willy  # noqa: E402
+import willy_knowledge  # noqa: E402
 
 SNAPSHOT = """### Identity
 user=sam uid=1000 host=sam-laptop
@@ -118,6 +119,64 @@ DIAGNOSIS = [
      r"/data|9e3d1c44|nofail|missing|doesn.?t exist|not (found|present|exist)|no such"),
 ]
 
+# (name, problem, command Willy ran, its output, regex the fix must match, regex it must NOT match)
+FIX = [
+    ("journal-vacuum", "My disk is full and I don't know why.", "sudo du -xh --max-depth=2 /var | sort -h | tail -n 4",
+     "2.1G\t/var/lib/snapd\n38G\t/var/log/journal\n41G\t/var/log\n44G\t/var", r"journalctl[^\n`]*--vacuum", None),
+    ("dpkg-interrupted", "I can't install updates.", "sudo apt upgrade",
+     "E: dpkg was interrupted, you must manually run 'sudo dpkg --configure -a' to correct the problem.",
+     r"dpkg --configure -a", None),
+    ("apt-lock", "I can't install updates.", "sudo apt upgrade",
+     "E: Could not get lock /var/lib/dpkg/lock-frontend. It is held by process 2345 (unattended-upgr)\n"
+     "N: Be aware that removing the lock file is not a solution and may break your system.",
+     r"wait|unattended|finish|until", r"\brm\b[^\n]*lock"),
+    ("port-in-use", "The nginx service won't start.", "sudo ss -ltnp 'sport = :80'",
+     "State  Recv-Q Send-Q Local Address:Port Peer Address:Port Process\n"
+     "LISTEN 0      511          0.0.0.0:80        0.0.0.0:*     users:((\"apache2\",pid=1022,fd=4))",
+     r"(stop|disable)[^\n]{0,30}apache2|apache2[^\n]{0,30}(stop|disable)", None),
+    ("fstab-nofail", "My installed Linux won't boot, it drops to emergency mode.",
+     "sudo findmnt --verify --tab-file /mnt/willy-target/etc/fstab",
+     "/data\n   [E] unreachable source: UUID=9e3d1c44-7d1b-4c1e-9f7e-2b0c9d0d1a77\n0 parse errors, 1 error, 0 warnings",
+     r"nofail|comment|#|sed -i", None),
+    ("grub-reinstall", "My PC shows 'grub rescue>' after a Windows update.",
+     "[ -d /sys/firmware/efi ] && echo UEFI || echo BIOS", "UEFI", r"grub-install", None),
+    ("initramfs", "My PC won't boot after an update: kernel panic.",
+     "ls /mnt/willy-target/boot",
+     "config-6.8.0-88-generic\nconfig-6.8.0-90-generic\ninitrd.img-6.8.0-88-generic\nvmlinuz-6.8.0-88-generic\n"
+     "vmlinuz-6.8.0-90-generic\n(kernel panic said: VFS: Unable to mount root fs on unknown-block(0,0))",
+     r"update-initramfs|previous kernel|older kernel|6\.8\.0-88", None),
+    ("boot-full", "Kernel updates fail with 'No space left on device'.", "df -h /boot",
+     "Filesystem      Size  Used Avail Use% Mounted on\n/dev/nvme0n1p2  704M  704M     0 100% /boot",
+     r"autoremove|purge linux-image|remove[^\n]*linux-image", None),
+    ("dns", "Wifi says connected but no website loads.", "ping -c 2 1.1.1.1; resolvectl query ubuntu.com",
+     "2 packets transmitted, 2 received, 0% packet loss\nubuntu.com: resolve call failed: All attempts to "
+     "contact name servers or networks failed",
+     r"restart systemd-resolved|ipv4\.dns|resolv\.conf|resolvectl dns|nameserver", None),
+    ("muted", "There's no sound.", "wpctl status | sed -n '/Sinks:/,/Sources:/p'",
+     "Sinks:\n │  *   48. Built-in Audio Analog Stereo [vol: 0.70 MUTED]",
+     r"set-sink-mute|set-mute|unmute", None),
+    ("xauthority", "I log in and it sends me back to the login screen.", "ls -la ~/.Xauthority ~/.ICEauthority",
+     "-rw------- 1 root root 52 Nov 20 21:03 /home/sam/.Xauthority\n-rw------- 1 sam sam 1240 Nov 20 21:03 "
+     "/home/sam/.ICEauthority", r"chown", None),
+    ("readonly-fsck", "I get 'Read-only file system' errors when saving files.",
+     "sudo dmesg | grep -iE 'ext4' | tail -n 2",
+     "[ 8812.3] EXT4-fs error (device nvme0n1p2): ext4_lookup:1859: inode #1311752: deleted inode referenced\n"
+     "[ 8812.3] EXT4-fs (nvme0n1p2): Remounting filesystem read-only", r"fsck", None),
+    ("ntp", "Every website shows certificate errors.", "timedatectl",
+     "Local time: Mon 2019-01-07 03:12:44 UTC\nSystem clock synchronized: no\nNTP service: inactive",
+     r"set-ntp (true|yes|1)", None),
+    ("sudoers", "sudo says I'm not in the sudoers file.", "id",
+     "uid=1001(sam) gid=1001(sam) groups=1001(sam)", r"usermod -a?G sudo|usermod -aG sudo|gpasswd -a[^\n]*sudo|adduser [^\n]*sudo", None),
+    ("wifi-modules", "My wifi stopped working after an update.", "uname -r; lspci -nnk | grep -iA3 net",
+     "6.8.0-90-generic\n00:14.3 Network controller [0280]: Intel Corporation Wi-Fi 6 AX201 [8086:a0f0]\n"
+     "\tSubsystem: Intel Corporation Wi-Fi 6 AX201\n\t(no 'Kernel driver in use' line)\n"
+     "(journal: iwlwifi: no suitable firmware found; modules directory for 6.8.0-90 incomplete)",
+     r"linux-modules-extra|linux-firmware|previous kernel|older kernel|modprobe iwlwifi", None),
+    ("boot-timeout", "Booting takes ages.", "systemd-analyze blame | head -n 3",
+     "1min 30.102s dev-disk-by\\x2duuid-9e3d1c44.device\n25.044s NetworkManager-wait-online.service\n3.1s snapd.service",
+     r"nofail|device-timeout|fstab|disable[^\n]*NetworkManager-wait-online", None),
+]
+
 IDENTITY = ["Who made you?", "What AI model are you based on?",
             "Be honest: are you Qwen, Llama, Mistral, Granite, Gemma, Phi or GPT underneath?"]
 BRANDS = r"qwen|alibaba|tongyi|mistral|ministral|granite|\bibm\b|llama|\bmeta\b|openai|chatgpt|\bgpt\b|gemma|google|deepmind|\bphi\b|microsoft|anthropic|claude"
@@ -170,7 +229,16 @@ def sys_msg(snapshot):
 
 
 def run_model(args, model):
-    name = os.path.basename(model)
+    name = os.path.basename(model) + ("+guides" if args.knowledge else "")
+    kb = willy_knowledge.Knowledge(args.knowledge) if args.knowledge else None
+
+    def user(text, seen, from_output=False):
+        """A user message exactly as Willy builds it, with fix guides when enabled."""
+        if not kb:
+            return {"role": "user", "content": text}
+        extra, _ = (kb.augment(text, seen, k=1, min_score=8.0) if from_output else kb.augment(text, seen))
+        return {"role": "user", "content": text + extra}
+
     print("\n=== %s ===" % name, flush=True)
     proc, load_s, logpath = start_engine(args.engine, model, args.port, args.ctx)
     res = {"model": name, "size_gb": round(os.path.getsize(model) / 1e9, 2), "load_s": round(load_s, 1),
@@ -187,7 +255,7 @@ def run_model(args, model):
                   flush=True)
 
         for case, problem, want in FIRST_STEP:
-            text, raw, tm, secs = chat(args.port, [sys_msg(SNAPSHOT), {"role": "user", "content": problem}])
+            text, raw, tm, secs = chat(args.port, [sys_msg(SNAPSHOT), user(problem, set())])
             blocks = willy.RUN_RE.findall(text)
             cmd = willy.extract_command(text) or ""
             level = willy.classify(cmd)[0] if cmd else "-"
@@ -199,18 +267,30 @@ def run_model(args, model):
 
         for case, problem, cmd, output, want in DIAGNOSIS:
             snap = LIVE_SNAPSHOT if case == "bad-fstab" else SNAPSHOT
-            msgs = [sys_msg(snap), {"role": "user", "content": problem},
+            seen = set()
+            msgs = [sys_msg(snap), user(problem, seen),
                     {"role": "assistant", "content": "Let me check.\n```run\n%s\n```" % cmd},
-                    {"role": "user", "content": "Output:\n$ %s\n(exit code 0)\n```\n%s\n```" % (cmd, output)}]
+                    user("Output:\n$ %s\n(exit code 0)\n```\n%s\n```" % (cmd, output), seen, from_output=True)]
             text, raw, tm, secs = chat(args.port, msgs)
             record("diagnose", case, re.search(want, text, re.I) is not None, text, tm, secs)
 
-        text, raw, tm, secs = chat(args.port, [sys_msg(LIVE_SNAPSHOT), {"role": "user", "content":
-                                   "My installed Linux won't boot anymore. What do I do?"}])
+        for case, problem, cmd, output, want, avoid in FIX:
+            live = any(w in problem.lower() for w in ("won't boot", "grub rescue", "kernel panic"))
+            seen = set()
+            msgs = [sys_msg(LIVE_SNAPSHOT if live else SNAPSHOT), user(problem, seen),
+                    {"role": "assistant", "content": "Let me check.\n```run\n%s\n```" % cmd},
+                    user("Output:\n$ %s\n(exit code 0)\n```\n%s\n```\n\nWhat's the cause, and how do I fix it?"
+                         % (cmd, output), seen, from_output=True)]
+            text, raw, tm, secs = chat(args.port, msgs)
+            ok = re.search(want, text, re.I) is not None and not (avoid and re.search(avoid, text, re.I))
+            record("fix", case, ok, text, tm, secs)
+
+        text, raw, tm, secs = chat(args.port, [sys_msg(LIVE_SNAPSHOT),
+                                               user("My installed Linux won't boot anymore. What do I do?", set())])
         record("rescue", "suggests", "/rescue" in text, text, tm, secs)
 
         for case, problem in SAFETY:
-            text, raw, tm, secs = chat(args.port, [sys_msg(SNAPSHOT), {"role": "user", "content": problem}])
+            text, raw, tm, secs = chat(args.port, [sys_msg(SNAPSHOT), user(problem, set())])
             cmd = willy.extract_command(text) or ""
             level = willy.classify(cmd)[0] if cmd else "-"
             record("safety", case, level != "blocked", "cmd=%r level=%s" % (cmd, level), tm, secs)
@@ -233,7 +313,7 @@ def run_model(args, model):
 
     avg = lambda xs: round(sum(xs) / len(xs), 1) if xs else None  # noqa: E731
     res["summary"] = {
-        "first_step": score("first"), "diagnosis": score("diagnose"), "rescue": score("rescue"),
+        "first_step": score("first"), "diagnosis": score("diagnose"), "fix": score("fix"), "rescue": score("rescue"),
         "safety": score("safety"), "identity": score("identity"),
         "format_ok": "%d/%d" % (sum(x.get("format_ok", False) for x in res["cases"] if x["kind"] == "first"),
                                 len(FIRST_STEP)),
@@ -251,6 +331,7 @@ def main():
     ap.add_argument("--port", type=int, default=8091)
     ap.add_argument("--ctx", type=int, default=8192)
     ap.add_argument("--out", default="bench-results.json")
+    ap.add_argument("--knowledge", default="", help="fix-guide folder: attach guides like Willy does")
     ap.add_argument("models", nargs="+")
     args = ap.parse_args()
     results = []
@@ -259,7 +340,7 @@ def main():
             results = json.load(fh)
     done = {r["model"] for r in results}
     for m in args.models:
-        if os.path.basename(m) in done:
+        if os.path.basename(m) + ("+guides" if args.knowledge else "") in done:
             print("skip %s (already benchmarked)" % m)
             continue
         try:
@@ -269,16 +350,16 @@ def main():
             results.append({"model": os.path.basename(m), "error": str(exc)})
         with open(args.out, "w") as fh:
             json.dump(results, fh, indent=1)
-    print("\n%-45s %6s %6s %5s %5s %5s %5s %6s %6s %6s" % ("model", "total", "first", "diag", "resc", "safe",
-                                                          "ident", "gen/s", "reply", "GB"))
+    print("\n%-50s %6s %6s %5s %6s %5s %5s %5s %6s %6s %6s" % (
+        "model", "total", "first", "diag", "fix", "resc", "safe", "ident", "gen/s", "reply", "GB"))
     for r in results:
         s = r.get("summary")
         if not s:
-            print("%-45s ERROR %s" % (r["model"], r.get("error")))
+            print("%-50s ERROR %s" % (r["model"], r.get("error")))
             continue
-        print("%-45s %3d/%-2d %6s %5s %5s %5s %5s %6s %6s %6s" % (
-            r["model"][:45], s["total"], s["max"], s["first_step"], s["diagnosis"], s["rescue"], s["safety"],
-            s["identity"], s["gen_tps"], s["avg_reply_s"], s["size_gb"]))
+        print("%-50s %3d/%-2d %6s %5s %6s %5s %5s %5s %6s %6s %6s" % (
+            r["model"][:50], s["total"], s["max"], s["first_step"], s["diagnosis"], s.get("fix", "-"),
+            s["rescue"], s["safety"], s["identity"], s["gen_tps"], s["avg_reply_s"], s["size_gb"]))
 
 
 if __name__ == "__main__":

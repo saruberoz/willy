@@ -85,8 +85,10 @@ install_willy() {  # usb-mount-path choice
 
   say "Copying Willy"
   if [[ "$(cd "$dest" 2>/dev/null && pwd -P)" != "$(cd "$SRC" && pwd -P)" ]]; then
-    run cp "$SRC/willy.py" "$SRC/willy_rescue.py" "$SRC/willy_undo.py" "$SRC/start.sh" \
-           "$SRC/README.md" "$SRC/guidance.md" "$dest/"
+    run cp "$SRC/willy.py" "$SRC/willy_rescue.py" "$SRC/willy_undo.py" "$SRC/willy_knowledge.py" \
+           "$SRC/start.sh" "$SRC/README.md" "$SRC/guidance.md" "$dest/"
+    run mkdir -p "$dest/knowledge"
+    run cp "$SRC"/knowledge/*.md "$dest/knowledge/"
   fi
 
   say "Fetching Willy's engine"

@@ -23,8 +23,11 @@ import urllib.error
 import urllib.request
 
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
+import willy_knowledge  # noqa: E402
 import willy_rescue  # noqa: E402
 import willy_undo  # noqa: E402
+
+GUIDES_DIR = os.path.join(os.path.dirname(os.path.abspath(__file__)), "knowledge")
 
 COLOR = sys.stdout.isatty() and os.environ.get("NO_COLOR") is None
 
@@ -38,7 +41,16 @@ Wilson Sumanang. You run offline from a USB stick on the user's machine and can 
 shell commands on it.
 
 About yourself:
-- Your name is Willy and you were created by Wilson Sumanang. That is all you share about yourself.
+- Your name is Willy and you were created by Wilson Sumanang.
+- When someone asks who Wilson Sumanang is, or about your creator, answer warmly in 2-4 sentences
+  using this public profile (don't add anything beyond it):
+  Wilson Sumanang is based in Jakarta, Indonesia. He is the Co-Founder and CTO of PARKEE
+  (PT. Inovasi Anak Indonesia), whose automated, cashless parking systems run at about 700
+  locations across Indonesia, including airports, seaports, malls, hospitals and office towers,
+  processing around 20 million transactions a month. He founded Mobius Labs, an AI and software
+  company, in 2018. Before that he was VP of Engineering at Moka (acquired by Gojek in 2020) and
+  a software engineer in the United States. He studied Computer Science at Purdue University.
+  His motto: "Most people build apps. I build the system and technologies underneath."
 - Never name the AI model, model family, company or software you are based on or run on,
   and never describe how you were built or trained. If asked, reply: "I'm Willy, an offline
   Linux troubleshooting assistant created by Wilson Sumanang. I can't share details about
@@ -81,6 +93,9 @@ Rescue mode and undo:
   file or service change, so mention /undo when a fix doesn't help. /undo can NOT reverse
   package installs or removals, disk/partition changes or bootloader installs, so warn
   before those.
+- Messages may end with [Willy fix guides]: proven checks and fixes for that kind of problem.
+  Prefer their steps over guessing, adapt names, paths and devices to this PC, and say so if a
+  guide doesn't fit what you see.
 - /undo, /rescue, /report and the other slash commands are typed by the user in the chat.
   They are not shell commands: never put them in a ```run block.
 - When you know the cause, give a short diagnosis and numbered fix steps.
@@ -100,6 +115,9 @@ BASELINE = [
     ("Kernel errors/warnings", "dmesg --level=err,warn 2>/dev/null | tail -n 15"),
     ("Network", "ip -br addr 2>/dev/null; ip route 2>/dev/null | head -n 5; "
                 "grep -E '^nameserver' /etc/resolv.conf 2>/dev/null"),
+    # NetworkManager's own connectivity state first (no extra traffic); one quick ping otherwise.
+    ("Internet", "s=$(nmcli -t networking connectivity 2>/dev/null); if [ -n \"$s\" ]; then echo \"$s\"; "
+                 "elif ping -c 1 -W 2 1.1.1.1 >/dev/null 2>&1; then echo full; else echo none; fi"),
     ("Top CPU processes", "ps -eo pid,comm,%cpu,%mem --sort=-%cpu 2>/dev/null | head -n 8"),
 ]
 
@@ -217,11 +235,31 @@ def run_shell(cmd, timeout):
         return None, partial + "\n[timed out after %ss]" % timeout
 
 
+INTERNET_NOTES = {
+    "full": "Online: fixes that download packages or firmware will work.",
+    "limited": "OFFLINE (connected to a network, but it has no internet).",
+    "portal": "OFFLINE until someone logs in to this network's web page (captive portal).",
+    "none": "OFFLINE: no internet connection.",
+}
+OFFLINE_ADVICE = (" Prefer fixes that work without internet. If a fix needs a download (packages, drivers, "
+                  "firmware), say so clearly and suggest getting online first with an Ethernet cable or "
+                  "phone USB tethering, or an offline alternative such as booting the previous kernel.")
+
+
+def internet_state(snapshot):
+    m = re.search(r"### Internet\n(\w+)", snapshot)
+    return m.group(1).lower() if m else "unknown"
+
+
 def gather_snapshot(per_section):
     parts = []
     for label, cmd in BASELINE:
         _, out = run_shell(cmd, 15)
         out = out.strip() or "(no output)"
+        if label == "Internet":
+            state = out.split()[0].lower() if out.split() else "unknown"
+            note = INTERNET_NOTES.get(state, "Unknown whether this PC is online.")
+            out = "%s\n%s%s" % (state, note, "" if state == "full" else OFFLINE_ADVICE)
         parts.append("### %s\n%s" % (label, truncate(out, per_section)))
     return "\n\n".join(parts)
 
@@ -557,6 +595,32 @@ def write_report(args, messages, events, snapshot_os):
     return None
 
 
+def guides_list(guides):
+    if not len(guides):
+        return "No fix guides found (the willy/knowledge folder is missing)."
+    items = sorted(guides.guides, key=lambda g: g.title.lower())
+    lines = ["Willy's offline fix guides (%d). Read one with /guide <number or words>:" % len(items)]
+    for i, g in enumerate(items, 1):
+        lines.append("  %2d. %s" % (i, g.title))
+    return "\n".join(lines)
+
+
+def guide_text(guides, query):
+    items = sorted(guides.guides, key=lambda g: g.title.lower())
+    pick = None
+    if query.isdigit() and 1 <= int(query) <= len(items):
+        pick = items[int(query) - 1]
+    else:
+        pick = next((g for g in items if g.id == query), None)
+        if pick is None:
+            hits = guides.search(query, k=1, min_score=0.5)
+            pick = hits[0][1] if hits else None
+    if pick is None:
+        return "No guide matches %r. Type /guides to see them all." % query
+    rule = "-" * min(78, len(pick.title) + 4)
+    return "\n%s\n  %s\n%s\n%s\n" % (rule, pick.title, rule, pick.body)
+
+
 class Log(object):
     def __init__(self, directory):
         self.fh = None
@@ -584,6 +648,7 @@ Chat commands
   /reset           start a fresh conversation
   /undo            reverse the last change Willy made (/undo list shows them all)
   /report          save a summary of this session (problem, cause, what was fixed)
+  /guides          list Willy's offline fix guides; /guide <number or words> reads one
   /quit            exit Willy
   Ctrl+C           stop Willy's current reply
 
@@ -649,6 +714,8 @@ def main():
                     help="where /undo backups are kept")
     ap.add_argument("--report-dir", default=os.environ.get("WILLY_REPORT_DIR", ""),
                     help="where /report saves reports")
+    ap.add_argument("--knowledge-dir", default=os.environ.get("WILLY_KNOWLEDGE_DIR", GUIDES_DIR),
+                    help="folder of fix guides (set empty to turn guides off)")
     args = ap.parse_args()
 
     if not server_ok(args.api):
@@ -661,6 +728,20 @@ def main():
     undo = willy_undo.UndoJournal(args.backup_dir, ui)
     rescue = willy_rescue.Rescue(ui)
     live = willy_rescue.is_live_session()
+    guides = willy_knowledge.Knowledge(args.knowledge_dir)
+    guides_seen = set()
+
+    def with_guides(text, from_output=False):
+        """Attach matching fix guides to a message (command output needs a stronger match)."""
+        if not len(guides):
+            return text
+        extra, titles = (guides.augment(text, guides_seen, k=1, min_score=8.0) if from_output
+                         else guides.augment(text, guides_seen))
+        for title in titles:
+            print(c("  (Willy is using its guide: %s)" % title, "2"))
+        if titles:
+            log.write("guides", ", ".join(titles))
+        return text + extra
 
     print(c("Willy: offline Linux troubleshooter", "1;32") + c("  (created by Wilson Sumanang)", "2"))
     print("Nothing runs without your approval. Type ? to see commands and examples.")
@@ -673,6 +754,11 @@ def main():
     log.write("snapshot", snapshot)
     m = re.search(r'PRETTY_NAME="?([^"\n]+)', snapshot)
     snapshot_os = m.group(1) if m else "Linux"
+    if internet_state(snapshot) == "full":
+        print(c("Internet: connected. Fixes that need downloads can use it.", "2"))
+    else:
+        print(c("No internet: that's fine, Willy works fully offline. If a fix needs a download, "
+                "Willy will say so.", "2"))
     if live:
         print(c("\nYou started this PC from the rescue USB. If the PC's own Linux won't start,", "1;36"))
         print(c("type /rescue and Willy will find it and read why it failed.", "1;36"))
@@ -698,8 +784,15 @@ def main():
             if user == "/snapshot":
                 print(snapshot)
                 continue
+            if user in ("/guides", "/guide"):
+                print(guides_list(guides))
+                continue
+            if user.startswith("/guide "):
+                print(guide_text(guides, user[7:].strip()))
+                continue
             if user == "/reset":
                 messages = [system]
+                guides_seen.clear()
                 print("Conversation cleared.")
                 continue
             if user in ("/undo list", "/undo ls"):
@@ -761,8 +854,8 @@ def main():
                     cmd, code, note, truncate(out, args.max_output))
             pending = user
 
-        messages.append({"role": "user", "content": pending})
         log.write("you", pending)
+        messages.append({"role": "user", "content": with_guides(pending)})
         pending = None
         steps = 0
         quitting = False
@@ -838,8 +931,8 @@ def main():
             print(c("  [exit code %s]" % code, "2"))
             result = "$ %s\n(exit code %s)%s\n```\n%s\n```" % (cmd, code, note,
                                                               truncate(out, args.max_output) or "(no output)")
-            messages.append({"role": "user", "content": "Output:\n" + result})
             log.write("command", result)
+            messages.append({"role": "user", "content": with_guides("Output:\n" + result, from_output=True)})
 
         if quitting:
             break

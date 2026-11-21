@@ -28,6 +28,9 @@ willy> Let me check whether the wireless driver loaded.
 - **Rescue mode built in.** The stick can start a broken PC with Ubuntu 26.04. Type `/rescue`
   and Willy finds the PC's own Linux, opens it read-only and reads why it failed.
 - **Undo.** Willy backs up the files a fix will touch, and `/undo` puts them back exactly.
+- **Offline fix guides.** 45 proven guides, from Wi-Fi and full disks to GRUB, kernel panics,
+  firewalls, crashes and performance triage, steer Willy to tested fixes instead of guesses.
+  Read them yourself with `/guides`.
 - **Reports.** `/report` saves a one-page summary of the problem, the cause and the fix.
 - **Keeps a record.** Every session is saved in `willy/logs/` on the stick.
 
@@ -53,6 +56,8 @@ willy/
   willy.py         the assistant (Python 3, no installs needed)
   willy_rescue.py  rescue mode: finds, opens and repairs the PC's installed Linux
   willy_undo.py    backups and /undo
+  willy_knowledge.py  finds the right fix guide
+  knowledge/       45 offline fix guides (plain text, add your own)
   bin/             Willy's AI engine
   models/          Willy's AI brains (small and large)
   logs/  backups/  reports/   session records, undo backups and /report summaries

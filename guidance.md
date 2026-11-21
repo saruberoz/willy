@@ -51,6 +51,7 @@ Type `?` at any time to see the help screen inside Willy.
 | `/reset`     | start a new conversation                                        |
 | `/undo`      | reverse the last change (`/undo list` shows every change you can undo) |
 | `/report`    | save a one-page summary: problem, cause, what was fixed, what's left |
+| `/guides`    | list Willy's offline fix guides; `/guide <number or words>` reads one, e.g. `/guide wifi` |
 | `/rescue`    | rescue mode: find and open the PC's installed Linux (see section 4) |
 | `/quit`      | exit Willy (also stops its AI engine)                           |
 | Ctrl+C       | stop Willy's current reply                                      |
@@ -74,6 +75,45 @@ by reversing them, and files the command created are removed.
 **Some changes can't be undone**, and Willy tells you *before* you approve them: installing or
 removing software, disk and partition changes, and bootloader installs. Backups are kept in
 `willy/backups/` on the stick (files over 200 MB are skipped, and Willy says so).
+
+### Fix guides
+
+Willy carries more than 40 offline fix guides. When your problem, or an error in a command's
+output, matches a guide, Willy follows its proven steps instead of guessing, and shows a dim
+line like:
+
+```
+  (Willy is using its guide: Disk full: "No space left on device")
+```
+
+You can also read them yourself, with no AI involved: `/guides` lists them all, and
+`/guide <number or words>` shows one (for example `/guide grub` or `/guide 12`).
+
+| Area | Guides |
+|------|--------|
+| Getting started | how to troubleshoot (method, sanity checks, getting unstuck), 60-second performance triage, reading logs |
+| Speed and resources | slow PC, high CPU, memory/OOM/swap, disk I/O bottlenecks, slow boot |
+| Disks and storage | disk full, /boot full, deleted-but-open files and log rotation, disk errors and read-only filesystems, mounting and fsck, LVM, USB drives |
+| Booting | emergency mode (fstab), GRUB repair, kernel panic after an update, login loop, kernel modules and DKMS |
+| Networking | Wi-Fi, no internet/DNS, network settings (static IP, netplan, nmcli), unreachable services and ports, firewalls, tracing firewall rules, deep connection debugging, packet capture, VPN (IPsec, WireGuard, OpenVPN) |
+| Software | apt/dpkg errors, dnf/rpm packages, services that won't start, website 502/504 and PHP-FPM, crashes and core dumps, tracing programs (strace, eBPF) |
+| Security and access | permissions, sudo broken, SELinux, AppArmor/Firejail/snap/flatpak sandboxes |
+| Desktop and devices | sound, Bluetooth, printers, graphics and displays, time and certificates |
+
+The guides are plain text files in `willy/knowledge/`. To add your own, copy the format of an
+existing one: a `#` title line, a `Keywords:` line, and an `## Undo notes` section.
+
+### How to troubleshoot (with or without Willy)
+
+1. **Say exactly what happens**, since when, and what changed (an update, new hardware, a setting).
+2. **Read the errors:** `journalctl -b -p err --no-pager | tail -n 40` and `sudo dmesg -T | tail -n 40`.
+   Error messages are usually precise; take them literally.
+3. **Check the boring things first:** is the disk full (`df -h`)? Is the clock right (`timedatectl`)?
+   Does the internet work (`ping -c 3 1.1.1.1`)?
+4. **Test one idea at a time** with a read-only check, then **change one thing at a time**, with a backup.
+5. **Confirm the fix** by repeating what failed, then save a `/report`.
+
+For the full method, sanity checks and symptom checklists: `/guide how to troubleshoot`.
 
 ### Reports
 

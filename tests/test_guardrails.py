@@ -136,6 +136,25 @@ class TestRequest(unittest.TestCase):
         self.assertTrue(sent.get("cache_prompt"))
 
 
+class TestInternetState(unittest.TestCase):
+    def test_states(self):
+        self.assertEqual(willy.internet_state("### Internet\nfull\nOnline: ..."), "full")
+        self.assertEqual(willy.internet_state("### Internet\nnone\nOFFLINE"), "none")
+        self.assertEqual(willy.internet_state("no section"), "unknown")
+
+    def test_offline_snapshot_tells_the_brain(self):
+        with mock.patch.object(willy, "run_shell", return_value=(0, "none\n")):
+            snap = willy.gather_snapshot(1200)
+        self.assertIn("OFFLINE", snap)
+        self.assertIn("phone USB tethering", snap)
+
+    def test_online_snapshot(self):
+        with mock.patch.object(willy, "run_shell", return_value=(0, "full\n")):
+            snap = willy.gather_snapshot(1200)
+        self.assertIn("Online", snap)
+        self.assertNotIn("tethering", snap)
+
+
 class TestRunBlocks(unittest.TestCase):
     def test_extract(self):
         self.assertEqual(willy.extract_command("Check.\n```run\ndf -h\n```"), "df -h")

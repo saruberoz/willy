@@ -30,6 +30,11 @@ class TestScrub(unittest.TestCase):
         self.assertIn("Wilson Sumanang", willy.SYSTEM_PROMPT)
         self.assertIn("can't share details", willy.SYSTEM_PROMPT)
 
+    def test_creator_profile_survives_the_filter(self):
+        for fact in ("PARKEE", "Mobius Labs", "Purdue", "Moka", "Gojek", "Jakarta"):
+            self.assertIn(fact, willy.SYSTEM_PROMPT)
+            self.assertEqual(willy.scrub_identity(fact), fact)
+
 
 class TestStreamingScrub(unittest.TestCase):
     """A name split across streamed chunks must still be scrubbed before printing."""
