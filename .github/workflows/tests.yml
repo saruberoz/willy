@@ -6,13 +6,15 @@ on:
 
 jobs:
   test:
+    name: test (Python ${{ matrix.python }})
     runs-on: ubuntu-latest
     strategy:
+      fail-fast: false
       matrix:
-        python: ["3.8", "3.12"]
+        python: ["3.12", "3.13"]
     steps:
-      - uses: actions/checkout@v4
-      - uses: actions/setup-python@v5
+      - uses: actions/checkout@v5
+      - uses: actions/setup-python@v6
         with:
           python-version: ${{ matrix.python }}
       - name: Unit tests (guardrails, undo, rescue, identity)
@@ -21,3 +23,13 @@ jobs:
         run: |
           bash -n start.sh
           bash -n setup-usb.sh
+
+  old-python:
+    # Willy runs on older Linux PCs too, so keep testing an old Python.
+    name: test (Python 3.8, older Linux)
+    runs-on: ubuntu-latest
+    container: python:3.8-slim
+    steps:
+      - uses: actions/checkout@v5
+      - name: Unit tests
+        run: python -W error::ResourceWarning -m unittest discover -s tests -v
