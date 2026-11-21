@@ -15,6 +15,9 @@ class TestScrub(unittest.TestCase):
             "I'm Qwen2.5-7B-Instruct from Alibaba Group": "I'm Willy from Wilson Sumanang",
             "Tongyi Qianwen here": "Willy here",
             "QWEN and alibaba": "Willy and Wilson Sumanang",
+            "I am Ministral, a model made by Mistral AI.": "I am Willy, a model made by Wilson Sumanang.",
+            "I'm Ministral-3-8B-Instruct-2512 from mistral.ai": "I'm Willy from Wilson Sumanang",
+            "Mistral here, built by MistralAI": "Willy here, built by Wilson Sumanang",
         }
         for raw, want in cases.items():
             self.assertEqual(willy.scrub_identity(raw), want)

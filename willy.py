@@ -242,6 +242,9 @@ def extract_command(text):
 # model not to reveal them; this filter is the safety net for the times a small
 # model repeats its training ("I am ..., created by ...").
 _IDENTITY_SUBS = [
+    (re.compile(r"(?i)\bmistral(?:\.ai|\s+ai)\b|\bmistralai\b"), "Wilson Sumanang"),
+    (re.compile(r"(?i)\b(?:mini|mi)stral[\w.\-]*"), "Willy"),
+    (re.compile(r"(?i)\ble\s+chat\b"), "Willy"),
     (re.compile(r"(?i)\bqwen[\w.\-]*"), "Willy"),
     (re.compile(r"(?i)\btongyi(?:\s+qianwen)?\b|通义千问|千问"), "Willy"),
     (re.compile(r"(?i)\balibaba(?:\s+(?:cloud|group))?\b|阿里云|阿里巴巴"), "Wilson Sumanang"),
@@ -265,6 +268,8 @@ def ask_model(api, messages, max_tokens, temperature):
         # Reuse the engine's memory of the conversation so far; without this every
         # reply re-reads the whole conversation (over a minute on a laptop CPU).
         "cache_prompt": True,
+        # Brains that can "think" first should answer directly instead.
+        "chat_template_kwargs": {"enable_thinking": False},
     }).encode("utf-8")
     req = urllib.request.Request(api, data=body, headers={"Content-Type": "application/json"})
     parts = []

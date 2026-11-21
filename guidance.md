@@ -213,8 +213,8 @@ Set these before the start command, for example `WILLY_THREADS=4 bash .../start.
 | `WILLY_GPU` | on when an NVIDIA or AMD card is found | set to `0` to always use the CPU |
 
 **Graphics cards:** Willy tries to use an NVIDIA or AMD card automatically, which makes replies
-much faster. It needs the card's proprietary driver installed and a modern system (glibc 2.34
-or newer). When the card can't be used, Willy says so at startup and runs on the CPU instead.
+much faster. It needs the card's driver installed. When the card can't be used, Willy says so
+at startup and runs on the CPU instead.
 The Ubuntu rescue system uses open-source drivers, so in rescue mode Willy usually runs on the CPU.
 
 ## 6. Troubleshooting

@@ -12,20 +12,21 @@
 #   Add --share when the stick is for someone else: it includes the third-party
 #   licences (required when giving or selling sticks).
 #
-#   small = small brain (~2 GB, needs ~4 GB free RAM, for older PCs)
-#   large = large brain (~4.7 GB, needs ~7 GB free RAM, better answers)
+#   small = small brain (~2.2 GB, needs ~4 GB free RAM, for older PCs)
+#   large = large brain (~5.2 GB, needs ~7 GB free RAM, better answers)
 #   both  = default; Willy picks whichever fits the PC's RAM
 #
 # Created by Wilson Sumanang.
 set -euo pipefail
 
-LLAMAFILE_VERSION="0.9.3"
-LLAMAFILE_URL="https://github.com/Mozilla-Ocho/llamafile/releases/download/${LLAMAFILE_VERSION}/llamafile-${LLAMAFILE_VERSION}"
-LLAMAFILE_SHA256="c62b303d2fa6ca6829f10cf9b3c9bfae38a28182eacea92502a399b90547b24b"
-SMALL_URL="https://huggingface.co/bartowski/Qwen2.5-3B-Instruct-GGUF/resolve/main/Qwen2.5-3B-Instruct-Q4_K_M.gguf"
-SMALL_SHA256="9c9f56a391a3abbd5b89d0245bf6106081bcc3173119d4229235dd9d23253f94"
-LARGE_URL="https://huggingface.co/bartowski/Qwen2.5-7B-Instruct-GGUF/resolve/main/Qwen2.5-7B-Instruct-Q4_K_M.gguf"
-LARGE_SHA256="65b8fcd92af6b4fefa935c625d1ac27ea29dcb6ee14589c55a8f115ceaaa1423"
+LLAMAFILE_VERSION="0.10.6"
+LLAMAFILE_URL="https://github.com/mozilla-ai/llamafile/releases/download/${LLAMAFILE_VERSION}/llamafile-${LLAMAFILE_VERSION}"
+LLAMAFILE_SHA256="d579f61dcd3a306f518e6d90e599d77793ed5f09543023d09c96ad35fcfa63f0"
+# Brains chosen with bench/brain_bench.py on 21 Nov 2026 (see CREATOR-NOTES.md).
+SMALL_URL="https://huggingface.co/bartowski/mistralai_Ministral-3-3B-Instruct-2512-GGUF/resolve/main/mistralai_Ministral-3-3B-Instruct-2512-Q4_K_M.gguf"
+SMALL_SHA256="fec9d28c7f8dab7c6857d54b56c8264cce57d6f6d9003bd4110f6457f071c65a"
+LARGE_URL="https://huggingface.co/bartowski/mistralai_Ministral-3-8B-Instruct-2512-GGUF/resolve/main/mistralai_Ministral-3-8B-Instruct-2512-Q4_K_M.gguf"
+LARGE_SHA256="7deb50ecb3afca928f0aa6dccdb87ed4ce4ab3991797e5fc0e0dedb92754802a"
 VENTOY_VERSION="1.1.18"
 VENTOY_URL="https://github.com/ventoy/Ventoy/releases/download/v${VENTOY_VERSION}/ventoy-${VENTOY_VERSION}-linux.tar.gz"
 VENTOY_SHA256="d86ff9de63d94c8b8f1f6b14d23c55af4b88e8207bf2893890892a6a97b1ad54"
@@ -102,10 +103,6 @@ install_willy() {  # usb-mount-path choice
     run mkdir -p "$dest/licenses"
     run cp "$SRC"/licenses/* "$dest/licenses/"
     run cp "$SRC/LICENSE" "$dest/licenses/Willy-MIT-LICENSE.txt"
-    if [[ "$choice" != "large" ]]; then
-      echo "   note: the small brain is licensed for non-commercial use only. For sticks you sell,"
-      echo "         build with 'large' instead."
-    fi
   fi
 }
 

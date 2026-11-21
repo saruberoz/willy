@@ -100,10 +100,11 @@ else
   label=$(basename "$MODEL" .gguf); label=${label#willy-}
 
   start_engine() {  # $1 = "gpu" or "cpu"
-    local extra=()
-    [[ "$1" == "gpu" ]] && extra=("${GPU_ARGS[@]}")
-    "${RUNNER[@]}" --server --nobrowser -m "$MODEL" --host 127.0.0.1 --port "$PORT" \
-        -c "$CTX" ${THREAD_ARGS[@]+"${THREAD_ARGS[@]}"} ${extra[@]+"${extra[@]}"} >"$SERVER_LOG" 2>&1 &
+    local extra=(--gpu disable)
+    [[ "$1" == "gpu" ]] && extra=(--gpu auto "${GPU_ARGS[@]}")
+    # --reasoning off: Willy wants direct answers, not long hidden "thinking".
+    "${RUNNER[@]}" --server -m "$MODEL" --host 127.0.0.1 --port "$PORT" --reasoning off \
+        -c "$CTX" ${THREAD_ARGS[@]+"${THREAD_ARGS[@]}"} "${extra[@]}" >"$SERVER_LOG" 2>&1 &
     SERVER_PID=$!
     for _ in $(seq 1 300); do
       if health; then return 0; fi
